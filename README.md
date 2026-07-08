@@ -1,56 +1,45 @@
-# comparador.pt — MVP
+# comparador.pt
 
-Comparador neutro de custos domésticos em Portugal. Frontend Vite + React,
-backend serverless em Cloudflare Pages Functions.
+Comparador neutro de custos domésticos em Portugal. Sem leads enviesados,
+sem parcerias que distorçam a ordenação — a ideia é simples: mostrar quem é
+realmente mais barato, com dados de fontes oficiais sempre que possível.
 
-## Estado dos módulos
+## O que compara
 
-| Tab | Dados | Fonte |
-|---|---|---|
-| Combustíveis | **Reais** | DGEG (via `/api/combustiveis`) |
-| Pacotes — cobertura | **Real** | GEO.ANACOM (via `/api/cobertura`) |
-| Pacotes — preços | Demo | Fase 2: tarifários + Zwame |
-| Móvel | Indicativos (campanhas 2026) | Fase 2: recolha automática |
-| Eletricidade | Demo (modelo simplificado) | Fase 2: ERSE |
-| Banca | Demo | Fase 2: preçários BdP |
+**Combustíveis** — preços por posto em todos os distritos de Portugal
+continental, com seis tipos de combustível (gasóleo simples e aditivado,
+gasolina 95 simples e aditivada, gasolina 98, GPL Auto). Ordenação do mais
+barato ao mais caro, favoritos, e cálculo de poupança por depósito. Dados
+diretos da DGEG.
 
-## Desenvolvimento local
+**Pacotes de telecomunicações (fibra + TV)** — valida a cobertura real na
+tua morada através do código postal, cruzando com dados oficiais da
+ANACOM, e só mostra as ofertas que existem efetivamente no local. Cruza
+ainda o preço de tabela com preços reais conseguidos em renegociações pela
+comunidade, para uma referência mais próxima da realidade.
 
-```bash
-npm install
-npx wrangler pages dev -- npm run dev
-```
+**Tarifários móveis (avulso)** — comparação de planos standalone entre
+operadores tradicionais e MVNOs, com indicação de qual rede de suporte cada
+um usa e ordenação por preço ou por €/GB.
 
-O `wrangler pages dev` é necessário para as Functions (`/api/*`) funcionarem
-localmente; `npm run dev` sozinho serve apenas o frontend.
+**Eletricidade** — simulador de custo mensal por comercializador, com
+potência contratada, tarifa social e desconto de família numerosa.
 
-## Deploy no Cloudflare Pages
+**Contas bancárias e cashback** — comparação de comissões de manutenção
+por banco, filtrada por idade (contas jovem vs. gerais), e um guia rápido
+sobre como funciona o cashback em Portugal e onde existe sem custos
+escondidos.
 
-Opção A — CLI:
-```bash
-npm install
-npm run build
-npx wrangler login
-npx wrangler pages deploy dist --project-name comparador-pt
-```
+## Porquê
 
-Opção B — Git: cria um repositório, liga-o em dash.cloudflare.com → Workers &
-Pages → Create → Pages. Build command: `npm run build`. Output: `dist`.
-A pasta `functions/` é detetada automaticamente.
+Os comparadores existentes em Portugal tendem a ser geradores de contactos
+para os operadores — a ordenação nem sempre reflete o preço real, e a
+"melhor oferta" costuma coincidir com quem paga mais pela referência. Este
+projeto não tem esse modelo: o objetivo é mostrar o que existe, o que
+custa, e deixar a decisão para quem visita.
 
+## Estado atual
 
-## Estrutura
-
-```
-comparador-pt/
-├── index.html
-├── package.json
-├── vite.config.js
-├── src/
-│   ├── main.jsx
-│   └── App.jsx          # UI completa (5 tabs)
-└── functions/
-    └── api/
-        ├── cobertura.js     # GEO.ANACOM (real)
-        └── combustiveis.js  # DGEG (real)
-```
+Combustíveis e a validação de cobertura de telecom já usam dados reais.
+As restantes áreas (preços de pacotes, móvel, eletricidade, banca) usam
+valores indicativos enquanto a recolha automática de dados é construída.
