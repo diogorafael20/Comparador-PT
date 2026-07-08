@@ -39,9 +39,3 @@ para os operadores — a ordenação nem sempre reflete o preço real, e a
 "melhor oferta" costuma coincidir com quem paga mais pela referência. Este
 projeto não tem esse modelo: o objetivo é mostrar o que existe, o que
 custa, e deixar a decisão para quem visita.
-
-## Estado atual
-
-Combustíveis e a validação de cobertura de telecom já usam dados reais.
-As restantes áreas (preços de pacotes, móvel, eletricidade, banca) usam
-valores indicativos enquanto a recolha automática de dados é construída.
