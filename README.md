@@ -38,22 +38,6 @@ Opção B — Git: cria um repositório, liga-o em dash.cloudflare.com → Worke
 Pages → Create → Pages. Build command: `npm run build`. Output: `dist`.
 A pasta `functions/` é detetada automaticamente.
 
-## Avisos importantes
-
-1. **DGEG:** dados gratuitos e de utilização livre, mas **proibida a
-   utilização para fins comerciais**. Não colocar publicidade/afiliados
-   associados a esta tab sem autorização da DGEG.
-2. **GEO.ANACOM:** serviço REST público, dados trimestrais (DL 40/2022).
-   Cache de 24h implementada. Antes de tráfego significativo, confirmar os
-   termos de reutilização com a ANACOM.
-3. **IDs a validar na primeira execução:**
-   - Tipos de combustível (`FUEL_TYPES` em `src/App.jsx`): confirmar em
-     `precoscombustiveis.dgeg.gov.pt` (DevTools → Network) se os ids
-     correspondem aos rótulos.
-   - Nomes de campos da resposta DGEG (`functions/api/combustiveis.js`,
-     função de mapeamento): ajustar se a API devolver chaves diferentes.
-   - Resposta da GeoAPI.pt (`functions/api/cobertura.js`, função `geocode`).
-4. Favoritos de postos vivem apenas na sessão (sem persistência ainda).
 
 ## Estrutura
 
