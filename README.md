@@ -1,10 +1,12 @@
-# comparador.pt
+# Comparador.pt
 
 Comparador neutro de custos domésticos em Portugal. Sem leads enviesados,
 sem parcerias que distorçam a ordenação — a ideia é simples: mostrar quem é
 realmente mais barato, com dados de fontes oficiais sempre que possível.
 
-## O que compara
+## Objetivo:
+
+## Comparação atualizada de:
 
 **Combustíveis** — preços por posto em todos os distritos de Portugal
 continental, com seis tipos de combustível (gasóleo simples e aditivado,
@@ -18,7 +20,7 @@ ANACOM, e só mostra as ofertas que existem efetivamente no local. Cruza
 ainda o preço de tabela com preços reais conseguidos em renegociações pela
 comunidade, para uma referência mais próxima da realidade.
 
-**Tarifários móveis (avulso)** — comparação de planos standalone entre
+**Tarifários móveis (standalone)** — comparação de planos standalone entre
 operadores tradicionais e MVNOs, com indicação de qual rede de suporte cada
 um usa e ordenação por preço ou por €/GB.
 
