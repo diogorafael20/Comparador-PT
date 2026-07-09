@@ -1,19 +1,31 @@
 // functions/api/cobertura.js
-// Cloudflare Pages Function: fixed-network coverage lookup via GEO.ANACOM.
-// Flow: postal code -> coordinates (GeoAPI.pt) -> spatial query on the
-// public ArcGIS service -> related attribute table -> operators list.
-// Responses are cached at the edge for 24h (data changes quarterly).
+// Cloudflare Pages Function: fixed-network + satellite coverage via GEO.ANACOM.
+//
+// Flow (confirmed working against the live services):
+//   1. Geocode the postal code with Esri's World geocoder (official, reliable
+//      for PT addresses, no dependency on third-party geocoders).
+//   2. Query layer 0 (RedeFixa points) near that location to find building
+//      objectIds within a small buffer.
+//   3. queryRelatedRecords on layer 0 (relationshipId 0) to pull the actual
+//      coverage attributes (operator, technology, speeds) for those buildings.
+//   4. Query layer 2 directly at the point for satellite coverage, which is
+//      independent of buildings and always available as a fallback.
+//
+// Responses are cached at the edge for 24h (fixed/satellite data is reported
+// quarterly to ANACOM under DL 40/2022).
 
 const BASE = "https://geo.anacom.pt/server/rest/services/publico/Coberturas_Disponiveis/MapServer";
-const GEOAPI = "https://json.geoapi.pt/cp/";
-const RADIUS_M = 75;
+const GEOCODER = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates";
+const BUILDING_SEARCH_RADIUS_M = 60;
 const CACHE_TTL = 86400; // 24h
 
 // Coded value domains from the service schema (Portaria 77/2023)
 const OPERADOR = {
-  21: "DIGI", 24: "Dstelecom", 29: "Fastfiber", 30: "Fibroglobal",
-  32: "G9Telecom", 45: "LIGAT", 48: "MEO", 51: "NOS Acores", 52: "NOS",
-  53: "NOS Madeira", 55: "NOWO", 56: "ONI", 69: "Starlink", 81: "Vodafone",
+  21: "DIGI", 24: "Dstelecom", 25: "EchoStar Mobile", 29: "Fastfiber",
+  30: "Fibroglobal", 32: "G9Telecom", 41: "Iridium Italia",
+  44: "Leosat Portugal", 45: "LIGAT", 48: "MEO", 50: "Nextweb",
+  51: "NOS Acores", 52: "NOS", 53: "NOS Madeira", 55: "NOWO", 56: "ONI",
+  61: "Quantis Global", 69: "Starlink", 81: "Vodafone",
 };
 const TECNOLOGIA = {
   1: "Fibra otica (PON)", 2: "Fibra otica (P2P)",
@@ -22,7 +34,11 @@ const TECNOLOGIA = {
   9: "Outros",
 };
 
-const HEADERS = { "User-Agent": "comparador-pt/0.3 (nao comercial; prototipo)" };
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (compatible; comparador-pt/0.4)",
+  "Accept": "application/json",
+  "Referer": "https://comparadorpt.pages.dev/",
+};
 
 async function fetchJson(url) {
   const r = await fetch(url, { headers: HEADERS });
@@ -31,15 +47,17 @@ async function fetchJson(url) {
 }
 
 async function geocode(cp) {
-  const data = await fetchJson(GEOAPI + encodeURIComponent(cp) + "?json=1");
-  if (Array.isArray(data.centro) && data.centro.length >= 2) {
-    return { lat: Number(data.centro[0]), lon: Number(data.centro[1]) };
-  }
-  const pts = data.pontos || data.partes || [];
-  if (pts.length && pts[0].coordenadas) {
-    return { lat: Number(pts[0].coordenadas[0]), lon: Number(pts[0].coordenadas[1]) };
-  }
-  throw new Error("codigo postal nao geocodificavel");
+  const qs = new URLSearchParams({
+    f: "json",
+    outSR: JSON.stringify({ wkid: 4326 }),
+    sourceCountry: "PT",
+    SingleLine: cp,
+    maxSuggestions: "1",
+  });
+  const data = await fetchJson(`${GEOCODER}?${qs}`);
+  const cand = data.candidates && data.candidates[0];
+  if (!cand || cand.score < 80) throw new Error("codigo postal nao encontrado");
+  return { lat: cand.location.y, lon: cand.location.x, address: cand.address };
 }
 
 async function arcgisQuery(layer, params) {
@@ -49,44 +67,73 @@ async function arcgisQuery(layer, params) {
   return data;
 }
 
+async function arcgisRelated(layer, objectIds, relationshipId) {
+  const qs = new URLSearchParams({
+    f: "json",
+    objectIds: objectIds.join(","),
+    relationshipId: String(relationshipId),
+    outFields: "*",
+    returnGeometry: "false",
+  });
+  const data = await fetchJson(`${BASE}/${layer}/queryRelatedRecords?${qs}`);
+  if (data.error) throw new Error(`ArcGIS: ${data.error.message || data.error.code}`);
+  return data;
+}
+
 async function fixedCoverage(lat, lon) {
-  const geometry = JSON.stringify({ x: lon, y: lat, spatialReference: { wkid: 4326 } });
-  const step1 = await arcgisQuery(0, {
-    geometry,
+  // Step 1: find building points near the location
+  const points = await arcgisQuery(0, {
+    geometry: `${lon},${lat}`,
     geometryType: "esriGeometryPoint",
     inSR: "4326",
     spatialRel: "esriSpatialRelIntersects",
-    distance: String(RADIUS_M),
+    distance: String(BUILDING_SEARCH_RADIUS_M),
     units: "esriSRUnit_Meter",
-    outFields: "edif_cod",
+    outFields: "objectid",
     returnGeometry: "false",
   });
-  const codes = [...new Set((step1.features || []).map((f) => f.attributes.edif_cod))];
+  const objectIds = (points.features || []).map((f) => f.attributes.objectid);
+  if (!objectIds.length) return { edificios: 0, ofertas: [] };
+
+  // Step 2: pull the related coverage attributes for those buildings
+  const related = await arcgisRelated(0, objectIds, 0);
   const ofertas = [];
-  for (let i = 0; i < codes.length; i += 50) {
-    const chunk = codes.slice(i, i + 50);
-    const where = `estado = 1 AND cod_rel IN (${chunk.map((c) => `'${c}'`).join(",")})`;
-    const step2 = await arcgisQuery(1, {
-      where,
-      outFields: "cod_rel,operador,tecnologia_a,vel_max_dl_a,vel_max_ul_a,tecnologia_b,vel_max_dl_b,vel_max_ul_b",
-      returnGeometry: "false",
-    });
-    for (const feat of step2.features || []) {
-      const a = feat.attributes;
+  for (const group of related.relatedRecordGroups || []) {
+    for (const rec of group.relatedRecords || []) {
+      const a = rec.attributes;
+      if (a.estado !== 1) continue; // only active offers
       const op = OPERADOR[a.operador] || `cod:${a.operador}`;
       for (const s of ["a", "b"]) {
         const tec = a[`tecnologia_${s}`];
-        if (tec == null) continue;
+        if (!tec) continue;
         ofertas.push({
           operador: op,
           tecnologia: TECNOLOGIA[tec] || `cod:${tec}`,
-          vel_dl_mbps: a[`vel_max_dl_${s}`] ?? null,
-          vel_ul_mbps: a[`vel_max_ul_${s}`] ?? null,
+          vel_dl_mbps: a[`vel_max_dl_${s}`] || null,
+          vel_ul_mbps: a[`vel_max_ul_${s}`] || null,
         });
       }
     }
   }
-  return { edificios: codes.length, ofertas };
+  return { edificios: objectIds.length, ofertas };
+}
+
+async function satelliteCoverage(lat, lon) {
+  const data = await arcgisQuery(2, {
+    geometry: `${lon},${lat}`,
+    geometryType: "esriGeometryPoint",
+    inSR: "4326",
+    spatialRel: "esriSpatialRelIntersects",
+    outFields: "operador,operador_alias,vel_dl_sat,vel_ul_sat",
+    returnGeometry: "false",
+    where: "(vel_dl_sat is not null and vel_dl_sat <> 0) and (vel_ul_sat is not null and vel_ul_sat <> 0)",
+    orderByFields: "vel_dl_sat DESC,vel_ul_sat DESC",
+  });
+  return (data.features || []).map((f) => ({
+    operador: f.attributes.operador_alias || OPERADOR[f.attributes.operador] || `cod:${f.attributes.operador}`,
+    vel_dl_mbps: f.attributes.vel_dl_sat,
+    vel_ul_mbps: f.attributes.vel_ul_sat,
+  }));
 }
 
 export async function onRequestGet(context) {
@@ -96,22 +143,25 @@ export async function onRequestGet(context) {
     return Response.json({ error: "cp invalido (formato NNNN-NNN)" }, { status: 400 });
   }
 
-  // Edge cache: same postal code answered from cache for 24h
   const cacheKey = new Request(`https://cache.local/cobertura/${cp}`);
   const cache = caches.default;
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
 
   try {
-    const { lat, lon } = await geocode(cp);
-    const { edificios, ofertas } = await fixedCoverage(lat, lon);
-    const operadores = [...new Set(ofertas.map((o) => o.operador))].sort();
+    const { lat, lon, address } = await geocode(cp);
+    const [fixa, satelite] = await Promise.all([
+      fixedCoverage(lat, lon),
+      satelliteCoverage(lat, lon).catch(() => []), // satellite is a bonus, never block on it
+    ]);
+    const operadores = [...new Set(fixa.ofertas.map((o) => o.operador))].sort();
     const body = {
-      cp, lat, lon,
-      raio_m: RADIUS_M,
-      edificios,
+      cp, lat, lon, morada: address,
+      raio_m: BUILDING_SEARCH_RADIUS_M,
+      edificios: fixa.edificios,
       operadores,
-      ofertas,
+      ofertas: fixa.ofertas,
+      satelite,
       fonte: "GEO.ANACOM (DL 40/2022, atualizacao trimestral)",
     };
     const resp = Response.json(body, {

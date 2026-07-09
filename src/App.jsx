@@ -82,12 +82,12 @@ const DISTRITOS = [
 
 // DGEG fuel type ids (verify against /api/PrecoComb/ListarTiposCombustiveis)
 const FUEL_TYPES = [
-  { id: 3201, label: "Gasóleo simples" },
-  { id: 3205, label: "Gasóleo especial/aditivado" },
-  { id: 2101, label: "Gasolina 95 simples" },
-  { id: 2105, label: "Gasolina 95 aditivada" },
-  { id: 3400, label: "Gasolina 98 simples" },
-  { id: 3405, label: "Gasolina 98 aditivada" },
+  { id: 2101, label: "Gasóleo simples" },
+  { id: 2105, label: "Gasóleo especial" },
+  { id: 3201, label: "Gasolina simples 95" },
+  { id: 3205, label: "Gasolina especial 95" },
+  { id: 3400, label: "Gasolina 98" },
+  { id: 3405, label: "Gasolina especial 98" },
   { id: 1120, label: "GPL Auto" },
 ];
 
@@ -172,24 +172,39 @@ function formatCP(raw) {
 
 function FuelTab() {
   const [distrito, setDistrito] = useState(14); // Santarem
-  const [comb, setComb] = useState(3201); // gasoleo simples
+  const [concelho, setConcelho] = useState(""); // DGEG municipio Id, "" = todos
+  const [comb, setComb] = useState(2101); // gasoleo simples
   const [onlyFav, setOnlyFav] = useState(false);
   const [favs, setFavs] = useState(() => new Set());
   const [postos, setPostos] = useState([]);
+  const [municipios, setMunicipios] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Fetch the real concelho list whenever the distrito changes
+  useEffect(() => {
+    let cancelled = false;
+    setConcelho("");
+    fetch(`/api/municipios?distrito=${distrito}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data) => { if (!cancelled) setMunicipios(data.municipios || []); })
+      .catch(() => { if (!cancelled) setMunicipios([]); });
+    return () => { cancelled = true; };
+  }, [distrito]);
+
+  // Fetch prices whenever distrito, concelho or combustivel changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/combustiveis?distrito=${distrito}&tipo=${comb}`)
+    const cq = concelho ? `&concelho=${concelho}` : "";
+    fetch(`/api/combustiveis?distrito=${distrito}${cq}&tipo=${comb}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data) => { if (!cancelled) setPostos(data.postos || []); })
       .catch((e) => { if (!cancelled) { setError(String(e)); setPostos([]); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [distrito, comb]);
+  }, [distrito, concelho, comb]);
 
   const list = useMemo(() => {
     let l = [...postos];
@@ -202,6 +217,8 @@ function FuelTab() {
   const savePerTank = best != null && worst != null ? (worst - best) * 50 : 0;
   const combLabel = FUEL_TYPES.find((t) => t.id === comb).label;
   const distNome = DISTRITOS.find((d) => d.id === distrito).nome;
+  const concelhoNome = concelho ? municipios.find((m) => m.id === Number(concelho))?.nome : null;
+  const areaLabel = concelhoNome || distNome;
 
   const toggleFav = (id) =>
     setFavs((prev) => {
@@ -217,6 +234,10 @@ function FuelTab() {
       <div className="cpt-controls">
         <select className="cpt-select" value={distrito} onChange={(e) => setDistrito(Number(e.target.value))} aria-label="Distrito">
           {DISTRITOS.map((d) => <option key={d.id} value={d.id}>{d.nome}</option>)}
+        </select>
+        <select className="cpt-select" value={concelho} onChange={(e) => setConcelho(e.target.value)} aria-label="Concelho" disabled={!municipios.length}>
+          <option value="">Todos os concelhos</option>
+          {municipios.map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
         </select>
         <select className="cpt-select" value={comb} onChange={(e) => setComb(Number(e.target.value))} aria-label="Combustível">
           {FUEL_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
@@ -238,7 +259,7 @@ function FuelTab() {
         <div className="cpt-hero">
           <div>
             Poupança num depósito de 50 L
-            <small>{combLabel} · entre o posto mais caro e o mais barato de {distNome}</small>
+            <small>{combLabel} · entre o posto mais caro e o mais barato de {areaLabel}</small>
           </div>
           <b>{eur(savePerTank)}</b>
         </div>
@@ -246,7 +267,7 @@ function FuelTab() {
 
       {!loading && !error && list.length === 0 && (
         <p className="cpt-sub" style={{ paddingTop: 10 }}>
-          {onlyFav ? "Sem postos favoritos neste distrito." : "Sem postos para este filtro."}
+          {onlyFav ? "Sem postos favoritos neste filtro." : "Sem postos para este filtro."}
         </p>
       )}
 
@@ -300,15 +321,28 @@ function PacotesTab() {
       .finally(() => setLoading(false));
   };
 
+  const ofertas = result?.ofertas ?? [];
+  const satelite = result?.satelite ?? [];
   const covered = result?.operadores ?? [];
-  // Map ANACOM operator names to the retail brands in our price table
-  const list = useMemo(() => {
+
+  // Best fixed offer per operator, sorted by download speed (fastest first)
+  const porOperador = useMemo(() => {
+    const map = new Map();
+    for (const o of ofertas) {
+      const cur = map.get(o.operador);
+      if (!cur || (o.vel_dl_mbps || 0) > (cur.vel_dl_mbps || 0)) map.set(o.operador, o);
+    }
+    return [...map.values()].sort((a, b) => (b.vel_dl_mbps || 0) - (a.vel_dl_mbps || 0));
+  }, [ofertas]);
+
+  // Demo pricing matched against real coverage, for reference only
+  const precosDemo = useMemo(() => {
     const l = PACOTES.filter((p) =>
       covered.some((op) => op.toUpperCase().includes(p.op.toUpperCase()))
     );
     return l.sort((a, b) => (a.zwame ?? a.tabela) - (b.zwame ?? b.tabela));
   }, [covered]);
-  const best = list.length ? Math.min(...list.map((p) => p.zwame ?? p.tabela)) : 0;
+  const bestPreco = precosDemo.length ? Math.min(...precosDemo.map((p) => p.zwame ?? p.tabela)) : 0;
 
   return (
     <div>
@@ -349,40 +383,91 @@ function PacotesTab() {
       {result && (
         <>
           <div className="cpt-info" style={{ marginTop: 0, marginBottom: 12 }}>
-            <h4>Cobertura de rede fixa em {cp}</h4>
+            <h4>{result.morada || cp}</h4>
             {covered.length
-              ? <>Operadores com rede no local: {covered.join(", ")} · {result.edificios} edifício(s) analisados num raio de {result.raio_m} m.</>
-              : <>Sem registos de rede fixa neste código postal — pode ser uma área branca ou o raio de pesquisa não abranger edifícios.</>}
-            {" "}Dados trimestrais reportados à ANACOM — confirma sempre no operador.
+              ? <>Rede fixa de {covered.join(", ")} · {result.edificios} edifício(s) analisados num raio de {result.raio_m} m.</>
+              : <>Sem registos de rede fixa neste código postal — pode ser uma área branca de cobertura ou o raio de pesquisa não abrange edifícios registados.</>}
+            {" "}Dados trimestrais reportados à ANACOM — confirma sempre no operador antes de contratar.
             {covered.length === 1 && (
-              <> Só há um operador com rede: sem concorrência direta, o preço real das renegociações é a tua melhor referência para negociar.</>
+              <> Só há um operador com rede fixa: sem concorrência direta, o preço real de renegociações é a tua melhor referência para negociar.</>
             )}
           </div>
-          {list.map((p) => (
-            <div className="cpt-row" key={p.id}>
+
+          {porOperador.map((o, i) => (
+            <div className="cpt-row" key={o.operador + i}>
               <div style={{ flex: 1 }}>
-                <div className="cpt-name">{p.op} — {p.plan}</div>
-                <div className="cpt-meta">
-                  {p.tech} · fidelização: {p.fidel}
-                  {p.zwame && <> · tabela {eur(p.tabela)}</>}
-                </div>
-                {p.zwame && (
-                  <div className="cpt-meta" style={{ color: "var(--save)", fontWeight: 600 }}>
-                    Preço real (renegociações Zwame, mediana) — dados demo
-                  </div>
-                )}
+                <div className="cpt-name">{o.operador}</div>
+                <div className="cpt-meta">{o.tecnologia}</div>
               </div>
               <div>
-                <div className="cpt-price">{eur(p.zwame ?? p.tabela)}</div>
-                <Delta value={(p.zwame ?? p.tabela) - best} />
+                <div className="cpt-price">
+                  {o.vel_dl_mbps ? `${o.vel_dl_mbps} Mbps` : "—"}
+                </div>
+                <div className="cpt-delta">
+                  {o.vel_ul_mbps ? `↑ ${o.vel_ul_mbps} Mbps` : ""}
+                </div>
               </div>
             </div>
           ))}
+
+          {!porOperador.length && satelite.length > 0 && (
+            <div className="cpt-info">
+              <h4>Sem rede fixa, mas há satélite</h4>
+              Não há fibra, cabo ou cobre registados nesta morada, mas existem opções de internet
+              via satélite — normalmente mais caras e com mais latência, mas úteis em zonas rurais.
+            </div>
+          )}
+
+          {satelite.length > 0 && (
+            <>
+              {porOperador.length > 0 && <p className="cpt-sub" style={{ marginTop: 14 }}>Internet via satélite (alternativa)</p>}
+              {satelite.map((s, i) => (
+                <div className="cpt-row" key={"sat" + i}>
+                  <div style={{ flex: 1 }}>
+                    <div className="cpt-name">{s.operador}</div>
+                    <div className="cpt-meta">Satélite</div>
+                  </div>
+                  <div>
+                    <div className="cpt-price">{s.vel_dl_mbps} Mbps</div>
+                    <div className="cpt-delta">↑ {s.vel_ul_mbps} Mbps</div>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {precosDemo.length > 0 && (
+            <>
+              <p className="cpt-sub" style={{ marginTop: 16 }}>
+                Preços de referência (demo) para os operadores com cobertura confirmada
+              </p>
+              {precosDemo.map((p) => (
+                <div className="cpt-row" key={p.id}>
+                  <div style={{ flex: 1 }}>
+                    <div className="cpt-name">{p.op} — {p.plan}</div>
+                    <div className="cpt-meta">
+                      {p.tech} · fidelização: {p.fidel}
+                      {p.zwame && <> · tabela {eur(p.tabela)}</>}
+                    </div>
+                    {p.zwame && (
+                      <div className="cpt-meta" style={{ color: "var(--save)", fontWeight: 600 }}>
+                        Preço real (renegociações Zwame, mediana) — dados demo
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="cpt-price">{eur(p.zwame ?? p.tabela)}</div>
+                    <Delta value={(p.zwame ?? p.tabela) - bestPreco} />
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
         </>
       )}
       <p className="cpt-note">
-        A cobertura é real (GEO.ANACOM). Os preços dos pacotes são ainda demonstrativos — próxima
-        fase: recolha automática dos tarifários e das renegociações.
+        A cobertura e as velocidades são dados reais (GEO.ANACOM). Os preços apresentados são
+        ainda demonstrativos — próxima fase: recolha automática dos tarifários e das renegociações.
       </p>
     </div>
   );
