@@ -1,4 +1,4 @@
-# Comparador.pt
+# Comparador.pt - Ongoing Project
 
 Comparador neutro de custos domésticos em Portugal. Sem leads enviesados,
 sem parcerias que distorçam a ordenação — a ideia é simples: mostrar quem é
